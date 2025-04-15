@@ -156,7 +156,7 @@ public class AuthService implements IAuthService {
         SessionEntity session = sessionRepository.findByRefreshToken(refreshToken)
                 .orElseThrow(() -> new CustomException("Session not found for the provided refresh token", HttpStatus.UNAUTHORIZED));
 
-        if (!session.getIsValid()) {
+        if (!session.getIsValid())  {
             throw new CustomException("Refresh token has been invalidated", HttpStatus.UNAUTHORIZED);
         }
 
