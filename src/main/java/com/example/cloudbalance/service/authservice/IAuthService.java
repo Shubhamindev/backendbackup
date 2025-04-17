@@ -11,5 +11,6 @@ public interface IAuthService {
     ResponseEntity<AuthUserResponseDTO> refreshToken(String refreshToken);
     ResponseEntity<String> updatePassword(AuthUserRequestDTO userRequest);
     ResponseEntity<String> registerAdmin(AuthUserRequestDTO userRequest);
+
     boolean userExists(String email);
 }

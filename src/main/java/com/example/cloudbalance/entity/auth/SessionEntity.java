@@ -29,6 +29,7 @@ public class SessionEntity {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+
     @Column(name = "is_valid", nullable = false)
     private Boolean isValid;
 

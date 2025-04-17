@@ -1,3 +1,4 @@
+
 package com.example.cloudbalance.service.authservice;
 
 import com.example.cloudbalance.config.authconfig.JwtService;
@@ -121,7 +122,6 @@ public class AuthService implements IAuthService {
         return ResponseEntity.ok(responseDTO);
     }
 
-    @Override
     public ResponseEntity<String> logoutUser(String accessToken) {
         if (accessToken == null || accessToken.isBlank()) {
             throw new CustomException("Access token is missing or blank", HttpStatus.BAD_REQUEST);
@@ -136,6 +136,7 @@ public class AuthService implements IAuthService {
                 })
                 .orElseThrow(() -> new CustomException("Invalid or expired access token", HttpStatus.UNAUTHORIZED));
     }
+
 
     public ResponseEntity<AuthUserResponseDTO> refreshToken(String refreshToken) {
         if (refreshToken == null || refreshToken.isBlank()) {
@@ -153,10 +154,10 @@ public class AuthService implements IAuthService {
             throw new CustomException("Invalid refresh token", HttpStatus.UNAUTHORIZED);
         }
 
-        SessionEntity session = sessionRepository.findByRefreshToken(refreshToken)
+        SessionEntity oldSession = sessionRepository.findByRefreshToken(refreshToken)
                 .orElseThrow(() -> new CustomException("Session not found for the provided refresh token", HttpStatus.UNAUTHORIZED));
 
-        if (!session.getIsValid())  {
+        if (!oldSession.getIsValid()) {
             throw new CustomException("Refresh token has been invalidated", HttpStatus.UNAUTHORIZED);
         }
 
@@ -168,13 +169,23 @@ public class AuthService implements IAuthService {
         String newAccessToken = jwtService.generateToken(email);
         String newRefreshToken = jwtService.generateRefreshToken(email);
 
-        // Update session with new tokens
-        session.setAccessToken(newAccessToken);
-        session.setRefreshToken(newRefreshToken);
-        session.setUpdatedAt(LocalDateTime.now());
-        sessionRepository.save(session);
+        // Invalidate the old session
+        oldSession.setIsValid(false);
+        oldSession.setUpdatedAt(LocalDateTime.now());
+        sessionRepository.save(oldSession);
 
-        UsersEntity user = session.getUser();
+        // Create a brand new session with fresh timestamps
+        SessionEntity newSession = SessionEntity.builder()
+                .user(oldSession.getUser())
+                .accessToken(newAccessToken)
+                .refreshToken(newRefreshToken)
+                .isValid(true)
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .build();
+        sessionRepository.save(newSession);
+
+        UsersEntity user = oldSession.getUser();
 
         AuthUserResponseDTO response = new AuthUserResponseDTO(
                 newAccessToken,
@@ -186,6 +197,7 @@ public class AuthService implements IAuthService {
 
         return ResponseEntity.ok(response);
     }
+
 
     public ResponseEntity<String> registerUser(AuthUserRequestDTO userRequest) {
         if (userRequest == null || userRequest.getEmail() == null || userRequest.getUsername() == null) {

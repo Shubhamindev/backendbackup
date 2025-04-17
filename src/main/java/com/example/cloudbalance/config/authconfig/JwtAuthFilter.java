@@ -45,6 +45,8 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
         String accessToken = authHeader.substring(7);
 
+
+
         // Check if token is blacklisted/invalidated
         Optional<SessionEntity> sessionOpt = sessionRepository.findByAccessToken(accessToken);
         if (sessionOpt.isEmpty() || !sessionOpt.get().getIsValid()) {
@@ -78,7 +80,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                                     HttpServletResponse response, FilterChain filterChain)
             throws IOException, ServletException {
 
-        // Get refresh token from request
         String refreshToken = request.getHeader("X-Refresh-Token");
 
         if (refreshToken == null || refreshToken.isEmpty()) {
@@ -88,11 +89,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         }
 
         try {
-            // Verify refresh token
             String userEmail = jwtService.extractUsername(refreshToken);
-
-            // Check if refresh token is valid in database
             Optional<SessionEntity> sessionOpt = sessionRepository.findByRefreshToken(refreshToken);
+
             if (sessionOpt.isEmpty() || !sessionOpt.get().getIsValid() ||
                     !sessionOpt.get().getUser().getEmail().equals(userEmail)) {
                 response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
@@ -110,10 +109,19 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             session.setRefreshToken(newRefreshToken);
             session.setUpdatedAt(LocalDateTime.now());
             sessionRepository.save(session);
+
+            // Add tokens to response headers
             response.setHeader(HttpHeaders.AUTHORIZATION, "Bearer " + newAccessToken);
             response.setHeader("X-Refresh-Token", newRefreshToken);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write("Token refreshed successfully");
+
+            // Continue with the request using the new token
+            UserDetails userDetails = userDetailsService.loadUserByUsername(userEmail);
+            UsernamePasswordAuthenticationToken authToken =
+                    new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
+            SecurityContextHolder.getContext().setAuthentication(authToken);
+
+            // Continue the filter chain
+            filterChain.doFilter(request, response);
 
         } catch (Exception e) {
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
