@@ -1,4 +1,4 @@
-package com.example.cloudbalance.globalexceptionhandler;
+package com.example.cloudbalance.exception;
 
 import org.springframework.http.HttpStatus;
 

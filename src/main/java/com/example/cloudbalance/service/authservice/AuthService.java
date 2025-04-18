@@ -1,4 +1,3 @@
-
 package com.example.cloudbalance.service.authservice;
 
 import com.example.cloudbalance.config.authconfig.JwtService;
@@ -7,17 +6,21 @@ import com.example.cloudbalance.dto.authdto.AuthUserResponseDTO;
 import com.example.cloudbalance.entity.auth.RoleEntity;
 import com.example.cloudbalance.entity.auth.SessionEntity;
 import com.example.cloudbalance.entity.auth.UsersEntity;
-import com.example.cloudbalance.globalexceptionhandler.CustomException;
+import com.example.cloudbalance.exception.CustomException;
+import com.example.cloudbalance.mapper.auth.DtoToEntityMapper;
 import com.example.cloudbalance.repository.RoleRepository;
 import com.example.cloudbalance.repository.SessionRepository;
 import com.example.cloudbalance.repository.UserRepository;
-import com.example.cloudbalance.util.DtoToEntityMapper;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.Optional;
 
+@Slf4j
 @Service
 @Transactional
 public class AuthService implements IAuthService {
@@ -36,10 +40,12 @@ public class AuthService implements IAuthService {
     private final AuthenticationManager authenticationManager;
     private final PasswordEncoder passwordEncoder;
     private final DtoToEntityMapper dtoToEntityMapper;
+    private final UserDetailsService userDetailsService;
 
-    public AuthService(UserRepository userRepository, SessionRepository sessionRepository, RoleRepository roleRepository,
-                       JwtService jwtService, AuthenticationManager authenticationManager, PasswordEncoder passwordEncoder,
-                       DtoToEntityMapper dtoToEntityMapper) {
+    public AuthService(UserRepository userRepository, SessionRepository sessionRepository,
+                       RoleRepository roleRepository, JwtService jwtService,
+                       AuthenticationManager authenticationManager, PasswordEncoder passwordEncoder,
+                       DtoToEntityMapper dtoToEntityMapper, UserDetailsService userDetailsService) {
         this.userRepository = userRepository;
         this.sessionRepository = sessionRepository;
         this.roleRepository = roleRepository;
@@ -47,8 +53,8 @@ public class AuthService implements IAuthService {
         this.authenticationManager = authenticationManager;
         this.passwordEncoder = passwordEncoder;
         this.dtoToEntityMapper = dtoToEntityMapper;
+        this.userDetailsService = userDetailsService;
     }
-
 
     public ResponseEntity<AuthUserResponseDTO> loginUser(AuthUserRequestDTO userRequest) {
         if (userRequest == null) {
@@ -93,14 +99,6 @@ public class AuthService implements IAuthService {
         String accessToken = jwtService.generateToken(user.getEmail());
         String refreshToken = jwtService.generateRefreshToken(user.getEmail());
 
-        // Invalidate previous sessions
-        sessionRepository.findByUserAndIsValid(user, true).forEach(session -> {
-            session.setIsValid(false);
-            session.setUpdatedAt(LocalDateTime.now());
-            sessionRepository.save(session);
-        });
-
-        // Save new session
         SessionEntity session = SessionEntity.builder()
                 .user(user)
                 .accessToken(accessToken)
@@ -137,44 +135,53 @@ public class AuthService implements IAuthService {
                 .orElseThrow(() -> new CustomException("Invalid or expired access token", HttpStatus.UNAUTHORIZED));
     }
 
-
     public ResponseEntity<AuthUserResponseDTO> refreshToken(String refreshToken) {
+        log.info("Refreshing token: {}", refreshToken);
+
         if (refreshToken == null || refreshToken.isBlank()) {
+            log.warn("Refresh token is null or blank");
             throw new CustomException("Refresh token must be provided", HttpStatus.BAD_REQUEST);
         }
 
         String email;
         try {
             email = jwtService.extractUsername(refreshToken);
+            log.info("Extracted email from refresh token: {}", email);
         } catch (Exception e) {
+            log.error("Invalid refresh token format: {}", e.getMessage());
             throw new CustomException("Invalid refresh token format", HttpStatus.UNAUTHORIZED);
         }
 
         if (email == null || email.isBlank()) {
+            log.warn("Extracted email is null or blank");
             throw new CustomException("Invalid refresh token", HttpStatus.UNAUTHORIZED);
         }
 
         SessionEntity oldSession = sessionRepository.findByRefreshToken(refreshToken)
-                .orElseThrow(() -> new CustomException("Session not found for the provided refresh token", HttpStatus.UNAUTHORIZED));
+                .orElseThrow(() -> {
+                    log.warn("Session not found for refresh token");
+                    return new CustomException("Session not found for the provided refresh token", HttpStatus.UNAUTHORIZED);
+                });
 
-        if (!oldSession.getIsValid()) {
+        if (Boolean.FALSE.equals(oldSession.getIsValid())) {
+            log.warn("Refresh token session is invalidated");
             throw new CustomException("Refresh token has been invalidated", HttpStatus.UNAUTHORIZED);
         }
 
         if (!jwtService.isTokenValid(refreshToken, email)) {
+            log.warn("Refresh token is expired or invalid");
             throw new CustomException("Refresh token has expired or is invalid", HttpStatus.UNAUTHORIZED);
         }
 
-        // Generate new tokens
         String newAccessToken = jwtService.generateToken(email);
         String newRefreshToken = jwtService.generateRefreshToken(email);
+        log.info("Generated new access token: {}", newAccessToken);
 
-        // Invalidate the old session
         oldSession.setIsValid(false);
         oldSession.setUpdatedAt(LocalDateTime.now());
         sessionRepository.save(oldSession);
+        log.info("Invalidated old session for user: {}", email);
 
-        // Create a brand new session with fresh timestamps
         SessionEntity newSession = SessionEntity.builder()
                 .user(oldSession.getUser())
                 .accessToken(newAccessToken)
@@ -184,6 +191,13 @@ public class AuthService implements IAuthService {
                 .updatedAt(LocalDateTime.now())
                 .build();
         sessionRepository.save(newSession);
+        log.info("Created new session for user: {}", email);
+
+        UserDetails userDetails = userDetailsService.loadUserByUsername(email);
+        UsernamePasswordAuthenticationToken authToken =
+                new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(authToken);
+        log.info("Updated SecurityContextHolder for user: {}", email);
 
         UsersEntity user = oldSession.getUser();
 
@@ -195,9 +209,9 @@ public class AuthService implements IAuthService {
                 user.getRole().getName()
         );
 
+        log.info("Refresh token successful for user: {}", email);
         return ResponseEntity.ok(response);
     }
-
 
     public ResponseEntity<String> registerUser(AuthUserRequestDTO userRequest) {
         if (userRequest == null || userRequest.getEmail() == null || userRequest.getUsername() == null) {
@@ -219,7 +233,8 @@ public class AuthService implements IAuthService {
     }
 
     public ResponseEntity<String> updatePassword(AuthUserRequestDTO userRequest) {
-        if (userRequest == null || userRequest.getEmail() == null || userRequest.getPassword() == null || userRequest.getPassword().isBlank()) {
+        if (userRequest == null || userRequest.getEmail() == null ||
+                userRequest.getPassword() == null || userRequest.getPassword().isBlank()) {
             return ResponseEntity.badRequest().body("Invalid request data");
         }
 

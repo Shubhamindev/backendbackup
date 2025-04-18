@@ -2,7 +2,6 @@ package com.example.cloudbalance.service.authservice;
 
 import com.example.cloudbalance.entity.auth.UsersEntity;
 import com.example.cloudbalance.repository.UserRepository;
-import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;

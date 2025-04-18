@@ -2,7 +2,6 @@ package com.example.cloudbalance.controller.authcontroller;
 
 import com.example.cloudbalance.dto.authdto.AuthUserRequestDTO;
 import com.example.cloudbalance.dto.authdto.AuthUserResponseDTO;
-import com.example.cloudbalance.service.authservice.AuthService;
 import com.example.cloudbalance.service.authservice.IAuthService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;

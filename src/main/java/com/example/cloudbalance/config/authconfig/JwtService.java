@@ -1,17 +1,19 @@
-
 package com.example.cloudbalance.config.authconfig;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.Date;
 import java.util.function.Function;
 
+@Slf4j
 @Service
 public class JwtService {
+
     @Value("${jwt.secret}")
     private String secret;
 
@@ -22,42 +24,74 @@ public class JwtService {
     private long refreshExpiration;
 
     public String extractUsername(String token) {
-        return extractClaim(token, Claims::getSubject);
+        String username = extractClaim(token, Claims::getSubject);
+        log.debug("Extracted username from token: {}", username);
+        return username;
     }
 
     public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
-        final Claims claims = extractAllClaims(token);
-        return claimsResolver.apply(claims);
+        try {
+            final Claims claims = extractAllClaims(token);
+            return claimsResolver.apply(claims);
+        } catch (Exception e) {
+            log.warn("Failed to extract claim from token", e);
+            throw e;
+        }
     }
 
     private Claims extractAllClaims(String token) {
-        return Jwts.parser().setSigningKey(secret).parseClaimsJws(token).getBody();
+        try {
+            return Jwts.parser().setSigningKey(secret).parseClaimsJws(token).getBody();
+        } catch (Exception e) {
+            log.error("Error parsing JWT token", e);
+            throw e;
+        }
     }
 
     public String generateToken(String username) {
-        return createToken(username, expiration);
+        String token = createToken(username, expiration);
+        log.info("Generated access token for user: {}", username);
+        return token;
     }
 
     public String generateRefreshToken(String username) {
-        return createToken(username, refreshExpiration);
+        String refreshToken = createToken(username, refreshExpiration);
+        log.info("Generated refresh token for user: {}", username);
+        return refreshToken;
     }
 
     private String createToken(String username, long expirationTime) {
+        Date now = new Date();
+        Date expiryDate = new Date(System.currentTimeMillis() + expirationTime);
+        log.debug("Creating token for user: {} with expiration: {}", username, expiryDate);
         return Jwts.builder()
                 .setSubject(username)
-                .setIssuedAt(new Date())
-                .setExpiration(new Date(System.currentTimeMillis() + expirationTime))
+                .setIssuedAt(now)
+                .setExpiration(expiryDate)
                 .signWith(SignatureAlgorithm.HS256, secret)
                 .compact();
     }
 
     public boolean isTokenValid(String token, String username) {
-        final String extractedUsername = extractUsername(token);
-        return (extractedUsername.equals(username) && !isTokenExpired(token));
+        try {
+            final String extractedUsername = extractUsername(token);
+            boolean isTokenExpired = isTokenExpired(token);
+            boolean isValid = extractedUsername.equals(username) && !isTokenExpired;
+
+            log.debug("Token validation for {}: username match: {}, not expired: {}",
+                    username, extractedUsername.equals(username), !isTokenExpired);
+
+            return isValid;
+        } catch (Exception e) {
+            log.warn("Token validation failed for user {}: {}", username, e.getMessage());
+            return false;
+        }
     }
 
     private boolean isTokenExpired(String token) {
-        return extractExpiration(token).before(new Date());
+        boolean expired = extractExpiration(token).before(new Date());
+        log.debug("Token expired: {}", expired);
+        return expired;
     }
 
     private Date extractExpiration(String token) {

@@ -1,4 +1,4 @@
-package com.example.cloudbalance.util;
+package com.example.cloudbalance.mapper.auth;
 
 import com.example.cloudbalance.dto.authdto.AuthUserRequestDTO;
 import com.example.cloudbalance.entity.auth.RoleEntity;
@@ -9,12 +9,12 @@ import org.springframework.stereotype.Component;
 @Component
 public class DtoToEntityMapper {
 
-    public UsersEntity toUserEntity(AuthUserRequestDTO userRequest, RoleEntity userRole, PasswordEncoder passwordEncoder) {
+    public UsersEntity toUserEntity(AuthUserRequestDTO userRequest, RoleEntity role, PasswordEncoder passwordEncoder) {
         UsersEntity user = new UsersEntity();
         user.setEmail(userRequest.getEmail());
         user.setUsername(userRequest.getUsername());
         user.setPassword(passwordEncoder.encode(userRequest.getPassword()));
-        user.setRole(userRole);
+        user.setRole(role);
         return user;
     }
 }

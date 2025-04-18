@@ -5,7 +5,7 @@ import com.example.cloudbalance.dto.usermanagement.UserManagementResponseDTO;
 import com.example.cloudbalance.entity.auth.AccountEntity;
 import com.example.cloudbalance.entity.auth.RoleEntity;
 import com.example.cloudbalance.entity.auth.UsersEntity;
-import com.example.cloudbalance.globalexceptionhandler.CustomException;
+import com.example.cloudbalance.exception.CustomException;
 import com.example.cloudbalance.mapper.usermanagement.UserMapper;
 import com.example.cloudbalance.repository.AccountRepository;
 import com.example.cloudbalance.repository.RoleRepository;
@@ -13,17 +13,14 @@ import com.example.cloudbalance.repository.UserRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
-
 
 @Slf4j
 @Service
@@ -48,9 +45,11 @@ public class UserManagementService implements UserManagementServiceInterface {
 
     @Override
     public ResponseEntity<List<UserManagementResponseDTO>> getAllUsers() {
+        log.info("Fetching all users...");
         List<UsersEntity> users = userRepository.findAll();
 
-        if (users == null || users.isEmpty()) {
+        if (users.isEmpty()) {
+            log.warn("No users found in the database.");
             throw new CustomException("No users found.", HttpStatus.NOT_FOUND);
         }
 
@@ -59,55 +58,67 @@ public class UserManagementService implements UserManagementServiceInterface {
                     try {
                         return userMapper.toUserManagementResponseDTO(user);
                     } catch (Exception e) {
+                        log.error("Error mapping user entity to DTO for user: {}", user.getId(), e);
                         throw new CustomException("Error mapping user data.", HttpStatus.INTERNAL_SERVER_ERROR);
                     }
                 })
                 .collect(Collectors.toList());
-        log.info( "Fetched all users successfully.");
+
+        log.info("Fetched {} users successfully.", userDTOs.size());
         return ResponseEntity.ok(userDTOs);
     }
 
-
-
     public ResponseEntity<UserManagementResponseDTO> getUserById(Long id) {
+        log.info("Fetching user by ID: {}", id);
         if (id == null) {
+            log.warn("User ID is null.");
             throw new CustomException("User ID cannot be null.", HttpStatus.BAD_REQUEST);
         }
 
         UsersEntity user = userRepository.findByIdWithAccounts(id)
-                .orElseThrow(() -> new CustomException("User not found.", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> {
+                    log.warn("User not found with ID: {}", id);
+                    return new CustomException("User not found.", HttpStatus.NOT_FOUND);
+                });
 
+        log.info("User fetched successfully: ID {}", user.getId());
         return ResponseEntity.ok(userMapper.toUserManagementResponseDTO(user));
     }
 
     @Override
     public ResponseEntity<String> createUser(UserManagementRequestDTO userRequest) {
-        if (userRequest == null) {
-            throw new CustomException("Request cannot be null.", HttpStatus.BAD_REQUEST);
-        }
+        log.info("Creating new user: {}", userRequest.getUsername());
 
         if (userRequest.getEmail() == null || userRequest.getEmail().isEmpty()) {
+            log.warn("Email is missing in request.");
             throw new CustomException("Email is required.", HttpStatus.BAD_REQUEST);
         }
 
         if (userRequest.getUsername() == null || userRequest.getUsername().isEmpty()) {
+            log.warn("Username is missing in request.");
             throw new CustomException("Username is required.", HttpStatus.BAD_REQUEST);
         }
 
         if (userRequest.getPassword() == null || userRequest.getPassword().isEmpty()) {
+            log.warn("Password is missing in request.");
             throw new CustomException("Password is required.", HttpStatus.BAD_REQUEST);
         }
 
         if (userRepository.findByEmail(userRequest.getEmail()).isPresent()) {
-            throw new CustomException("Email already exists!", HttpStatus.BAD_REQUEST);
+            log.warn("Email already exists: {}", userRequest.getEmail());
+            throw new CustomException("Email already exists!", HttpStatus.CONFLICT);
         }
 
         if (userRepository.findByUsername(userRequest.getUsername()).isPresent()) {
-            throw new CustomException("Username already exists!", HttpStatus.BAD_REQUEST);
+            log.warn("Username already exists: {}", userRequest.getUsername());
+            throw new CustomException("Username already exists!", HttpStatus.CONFLICT);
         }
 
         RoleEntity role = roleRepository.findByName(userRequest.getRole())
-                .orElseThrow(() -> new CustomException("Role not found!", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> {
+                    log.error("Role not found: {}", userRequest.getRole());
+                    return new CustomException("Role not found!", HttpStatus.NOT_FOUND);
+                });
 
         UsersEntity newUser = UsersEntity.builder()
                 .email(userRequest.getEmail())
@@ -118,13 +129,13 @@ public class UserManagementService implements UserManagementServiceInterface {
 
         if (userRequest.getAccountIds() != null && !userRequest.getAccountIds().isEmpty()) {
             if (!"CUSTOMER".equalsIgnoreCase(userRequest.getRole())) {
-                throw new CustomException(
-                        "Accounts can only be assigned to users with the CUSTOMER role.",
-                        HttpStatus.FORBIDDEN
-                );
+                log.warn("Non-CUSTOMER role attempted to assign accounts.");
+                throw new CustomException("Accounts can only be assigned to users with the CUSTOMER role.", HttpStatus.FORBIDDEN);
             }
+
             Set<AccountEntity> accounts = accountRepository.findAllByIdIn(userRequest.getAccountIds());
             if (accounts == null || accounts.isEmpty()) {
+                log.warn("No accounts found for provided IDs: {}", userRequest.getAccountIds());
                 throw new CustomException("No accounts found for the provided IDs.", HttpStatus.NOT_FOUND);
             }
             newUser.setAccounts(accounts);
@@ -137,65 +148,75 @@ public class UserManagementService implements UserManagementServiceInterface {
 
     @Override
     public ResponseEntity<String> editUser(Long id, UserManagementRequestDTO userRequest) {
+        log.info("Editing user with ID: {}", id);
         if (id == null || userRequest == null) {
+            log.error("Edit request invalid: ID or request body is null.");
             throw new CustomException("Invalid request.", HttpStatus.BAD_REQUEST);
         }
 
         UsersEntity user = userRepository.findById(id)
-                .orElseThrow(() -> new CustomException("User not found!", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> {
+                    log.warn("User not found for edit: ID {}", id);
+                    return new CustomException("User not found!", HttpStatus.NOT_FOUND);
+                });
 
-        // --- Email Update ---
+        // Email
         String newEmail = userRequest.getEmail();
         if (newEmail != null && !newEmail.isBlank()) {
             if (!user.getEmail().equals(newEmail) &&
                     userRepository.findByEmail(newEmail).isPresent()) {
-                throw new CustomException("Email already exists!", HttpStatus.BAD_REQUEST);
+                log.warn("Email already exists during edit: {}", newEmail);
+                throw new CustomException("Email already exists!", HttpStatus.CONFLICT);
             }
             user.setEmail(newEmail);
         }
 
-        // --- Username Update ---
+        // Username
         String newUsername = userRequest.getUsername();
         if (newUsername != null && !newUsername.isBlank()) {
             if (!user.getUsername().equals(newUsername) &&
                     userRepository.findByUsername(newUsername).isPresent()) {
-                throw new CustomException("Username already exists!", HttpStatus.BAD_REQUEST);
+                log.warn("Username already exists during edit: {}", newUsername);
+                throw new CustomException("Username already exists!", HttpStatus.CONFLICT);
             }
             user.setUsername(newUsername);
         }
 
-        // --- Password Update ---
+        // Password
         String newPassword = userRequest.getPassword();
         if (newPassword != null && !newPassword.isBlank()) {
             user.setPassword(passwordEncoder.encode(newPassword));
         }
 
-        // --- Role Update ---
+        // Role
         String newRole = userRequest.getRole();
         if (newRole != null && !newRole.isBlank()) {
             RoleEntity roleEntity = roleRepository.findByName(newRole)
-                    .orElseThrow(() -> new CustomException("Role not found!", HttpStatus.NOT_FOUND));
+                    .orElseThrow(() -> {
+                        log.error("Role not found during update: {}", newRole);
+                        return new CustomException("Role not found!", HttpStatus.NOT_FOUND);
+                    });
             user.setRole(roleEntity);
         }
 
-        // --- Final Role after update ---
         String updatedRole = user.getRole().getName();
 
-        // --- Validation: Reject accountIds for non-CUSTOMER roles ---
+        // Account validation for non-CUSTOMER roles
         if (!"CUSTOMER".equalsIgnoreCase(updatedRole)
                 && userRequest.getAccountIds() != null
                 && !userRequest.getAccountIds().isEmpty()) {
+            log.warn("Non-CUSTOMER user cannot have account associations.");
             throw new CustomException("Accounts can only be assigned to users with the CUSTOMER role.", HttpStatus.FORBIDDEN);
         }
 
-        // --- Account Assignment ---
+        // Accounts for CUSTOMER role
         if ("CUSTOMER".equalsIgnoreCase(updatedRole)) {
             Set<AccountEntity> accounts = accountRepository.findAllByIdIn(
                     userRequest.getAccountIds() != null ? userRequest.getAccountIds() : Collections.emptySet()
             );
             user.setAccounts(accounts);
         } else {
-            user.setAccounts(Collections.emptySet()); // Always clear for non-CUSTOMER roles
+            user.setAccounts(Collections.emptySet());
         }
 
         userRepository.save(user);
@@ -203,19 +224,24 @@ public class UserManagementService implements UserManagementServiceInterface {
         return ResponseEntity.ok("User updated successfully!");
     }
 
-
     @Override
     public ResponseEntity<String> deleteUser(Long id) {
+        log.info("Deleting user with ID: {}", id);
         if (id == null) {
+            log.warn("Delete request failed: user ID is null.");
             throw new CustomException("User ID cannot be null.", HttpStatus.BAD_REQUEST);
         }
 
         UsersEntity user = userRepository.findById(id)
-                .orElseThrow(() -> new CustomException("User not found!", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> {
+                    log.warn("User not found during delete: ID {}", id);
+                    return new CustomException("User not found!", HttpStatus.NOT_FOUND);
+                });
 
-        user.getAccounts().clear(); // in case of constraint errors
+        user.getAccounts().clear(); // to avoid constraint issues
         userRepository.delete(user);
 
+        log.info("User deleted successfully: ID {}", id);
         return ResponseEntity.ok("User deleted successfully!");
     }
 }
